@@ -28,10 +28,33 @@ mod yaml_config {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let f = std::fs::File::open("example.yaml")?;
+fn run_program(path: String) -> Result<(), Box<dyn std::error::Error>> {
+    let f = std::fs::File::open(path)?;
     let m: yaml_config::Manage = serde_yaml::from_reader(f)?;
 
-    println!("Read YAML string: {:?}", m);
     Ok(())
+}
+
+use clap::{App, Arg};
+
+fn main() {
+    let matches = App::new("harmony validator management")
+        .version("0.0.1")
+        .author("Edgar Aroutiounian <edgar.factorial@gmail.com>")
+        .about("manage validator")
+        .arg(
+            Arg::with_name("yaml-config")
+                .short('c')
+                .long("yaml-config")
+                .about("need path to yaml"),
+        )
+        .get_matches();
+    match matches.value_of("yaml-config") {
+        None => println!("didnt work out yo"),
+        Some(p) => {
+            println!("here is more");
+            run_program("example.yaml".to_string());
+            ()
+        }
+    }
 }
