@@ -1,3 +1,11 @@
+use clap::{App, Arg};
+use std::io;
+use termion::raw::IntoRawMode;
+use tui::backend::TermionBackend;
+use tui::layout::{Constraint, Direction, Layout};
+use tui::widgets::{Block, Borders, Widget};
+use tui::Terminal;
+
 mod yaml_config {
     use std::collections::BTreeMap;
 
@@ -31,11 +39,19 @@ mod yaml_config {
 fn run_program(path: String) -> Result<(), Box<dyn std::error::Error>> {
     let f = std::fs::File::open(path)?;
     let m: yaml_config::Manage = serde_yaml::from_reader(f)?;
+    let stdout = io::stdout().into_raw_mode()?;
+    let backend = TermionBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
 
-    Ok(())
+    match terminal.draw(|mut f| {
+        let size = f.size();
+        let block = Block::default().title("Block").borders(Borders::ALL);
+        f.render_widget(block, size);
+    }) {
+        Err(err) => Err(Box::new(err)),
+        _ => Ok(()),
+    }
 }
-
-use clap::{App, Arg};
 
 fn main() {
     let matches = App::new("harmony validator management")
@@ -43,18 +59,19 @@ fn main() {
         .author("Edgar Aroutiounian <edgar.factorial@gmail.com>")
         .about("manage validator")
         .arg(
-            Arg::with_name("yaml-config")
+            Arg::with_name("file")
                 .short('c')
+                .takes_value(true)
                 .long("yaml-config")
                 .about("need path to yaml"),
         )
         .get_matches();
-    match matches.value_of("yaml-config") {
+
+    match matches.value_of("file") {
         None => println!("didnt work out yo"),
-        Some(p) => {
-            println!("here is more");
-            run_program("example.yaml".to_string());
-            ()
-        }
+        Some(p) => match run_program(p.to_string()) {
+            Err(b) => println!("something wrong {:?}", b),
+            _ => (),
+        },
     }
 }
