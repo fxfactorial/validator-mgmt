@@ -96,6 +96,34 @@ fn run_program(path: String) -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+use {
+    hyper::{
+        service::{make_service_fn, service_fn},
+        Body, Client, Request, Response, Server, Uri,
+    },
+    std::net::SocketAddr,
+};
+
+async fn serve_req(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
+    // Always return successfully with a response containing a body with
+    // a friendly greeting ;)
+    println!("Got request at {:?}", _req.uri());
+    let url_str = "http://www.google.com";
+    let url = url_str.parse::<Uri>().expect("failed to parse URL");
+    let res = Client::new().get(url).await?;
+    Ok(res)
+}
+
+use async_std::{fs::File, io, prelude::*, task};
+
+async fn read_file(path: &str) -> io::Result<String> {
+    println!("the path is ->{}", path);
+    let mut file = File::open(path).await?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).await?;
+    Ok(contents)
+}
+
 fn main() {
     let matches = App::new("harmony validator management")
         .version("0.0.1")
@@ -111,10 +139,14 @@ fn main() {
         .get_matches();
 
     match matches.value_of("file") {
-        None => println!("didnt work out yo"),
-        Some(p) => match run_program(p.to_string()) {
-            Err(b) => println!("something wrong {:?}", b),
-            _ => (),
-        },
+        None => eprintln!("didnt work out yo"),
+        Some(p) => {
+            let s = p.to_owned();
+            let manager_task = task::spawn(async move {
+                let result = read_file(&s).await;
+                println!("some thing {}", result.unwrap())
+            });
+            task::block_on(manager_task);
+        }
     }
 }
