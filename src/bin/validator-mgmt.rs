@@ -5,13 +5,13 @@ mod yaml_config {
 
     use serde::{Deserialize, Serialize};
 
-    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
     pub struct BLSKeyManagement {
         pub adjust_keys_off_median_every: u64,
         pub shard_0_keys: Vec<String>,
     }
 
-    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
     pub struct Notifications {
         pub enable: bool,
         pub report_every: u64,
@@ -21,7 +21,7 @@ mod yaml_config {
         pub mobile_phone: BTreeMap<String, String>,
     }
 
-    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
     pub struct Manage {
         pub mainnet_account_addr: String,
         pub collect_rewards_every: u64,
@@ -124,21 +124,74 @@ async fn read_file(path: &str) -> io::Result<String> {
     Ok(contents)
 }
 
-async fn adjust_bls_keys(secs: u64) {
-    let mut count = 0;
+async fn adjust_bls_keys(config: yaml_config::Manage) {
     loop {
-        count = count + 1;
-        println!("kick off one {}", count);
-        task::sleep(Duration::from_secs(secs)).await
+        println!("adjust bls keys ");
+        task::sleep(Duration::from_secs(
+            config.bls_key_management.adjust_keys_off_median_every,
+        ))
+        .await
     }
 }
 
-async fn collect_rewards(secs: u64) {
-    let mut count = 0;
+async fn handle_reporting(config: yaml_config::Manage) {
+    if !config.notifications.enable {
+        return println!("email & sms notifications not enabled");
+    }
+    let bash_str = format!(
+        "hmy --node={} blockchain validator elected | jq '{{\"elected\":.result}}'",
+        config.rpc_endpoint
+    );
+    let every = config.notifications.report_every;
+
     loop {
-        count = count + 1;
-        println!("kick off one {}", count);
-        task::sleep(Duration::from_secs(secs)).await
+        // task::sleep(Duration::from_secs(every)).await;
+
+        let output = std::process::Command::new("bash")
+            .args(&["-c", bash_str.as_str()])
+            .output()
+            .expect("why binary not working ");
+
+        match (
+            String::from_utf8(output.stdout).unwrap(),
+            String::from_utf8(output.stderr).unwrap(),
+        ) {
+            (_, problem) if problem != "" => eprintln!("some hmy issue {}", problem),
+            (json_output, _) => println!("something good {:?}", json_output),
+        }
+        return;
+    }
+}
+
+async fn collect_rewards(config: yaml_config::Manage) {
+    let args = [
+        "--node",
+        config.rpc_endpoint.as_str(),
+        "staking",
+        "collect-rewards",
+        "--delegator-addr",
+        config.mainnet_account_addr.as_str(),
+        "--chain-id",
+        "mainnet",
+    ];
+    loop {
+        task::sleep(Duration::from_secs(config.collect_rewards_every)).await;
+        match std::process::Command::new("hmy").args(&args).output() {
+            Ok(output) => {
+                match (
+                    String::from_utf8(output.stdout).unwrap(),
+                    String::from_utf8(output.stderr).unwrap(),
+                ) {
+                    (_, problem) if problem != "" => eprintln!("some hmy issue {}", problem),
+                    (json_output, _) => println!("something good {:?}", json_output),
+                }
+            }
+            Err(oops) => {
+                const WAIT_FOR: u64 = 60 * 5;
+                eprintln!("issue {:?} with subprocess args {:?}", oops, args);
+                task::sleep(Duration::from_secs(WAIT_FOR)).await;
+            }
+        }
     }
 }
 
@@ -160,10 +213,10 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     async_std::task::block_on(async {
         let config = read_file(yaml_path).await?;
         let m: yaml_config::Manage = serde_yaml::from_str(config.as_str())?;
-        task::spawn(adjust_bls_keys(
-            m.bls_key_management.adjust_keys_off_median_every,
-        ));
-        task::spawn(collect_rewards(m.collect_rewards_every));
+        let (m2, m3) = (m.clone(), m.clone());
+        task::spawn(adjust_bls_keys(m));
+        task::spawn(collect_rewards(m2));
+        task::spawn(handle_reporting(m3));
         async_std::future::pending().await
     })
 }
