@@ -115,19 +115,36 @@ async fn serve_req(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> 
 }
 
 use async_std::{fs::File, io, prelude::*, task};
+use std::io::{Error, ErrorKind};
 
 async fn read_file(path: &str) -> io::Result<String> {
-    println!("the path is ->{}", path);
     let mut file = File::open(path).await?;
     let mut contents = String::new();
     file.read_to_string(&mut contents).await?;
     Ok(contents)
 }
 
-fn main() {
+async fn adjust_bls_keys(secs: u64) {
+    let mut count = 0;
+    loop {
+        count = count + 1;
+        println!("kick off one {}", count);
+        task::sleep(Duration::from_secs(secs)).await
+    }
+}
+
+async fn collect_rewards(secs: u64) {
+    let mut count = 0;
+    loop {
+        count = count + 1;
+        println!("kick off one {}", count);
+        task::sleep(Duration::from_secs(secs)).await
+    }
+}
+
+fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let matches = App::new("harmony validator management")
         .version("0.0.1")
-        .author("Edgar Aroutiounian <edgar.factorial@gmail.com>")
         .about("manage validator")
         .arg(
             Arg::with_name("file")
@@ -138,15 +155,15 @@ fn main() {
         )
         .get_matches();
 
-    match matches.value_of("file") {
-        None => eprintln!("didnt work out yo"),
-        Some(p) => {
-            let s = p.to_owned();
-            let manager_task = task::spawn(async move {
-                let result = read_file(&s).await;
-                println!("some thing {}", result.unwrap())
-            });
-            task::block_on(manager_task);
-        }
-    }
+    let yaml_path = matches.value_of("file").ok_or("missing file")?;
+
+    async_std::task::block_on(async {
+        let config = read_file(yaml_path).await?;
+        let m: yaml_config::Manage = serde_yaml::from_str(config.as_str())?;
+        task::spawn(adjust_bls_keys(
+            m.bls_key_management.adjust_keys_off_median_every,
+        ));
+        task::spawn(collect_rewards(m.collect_rewards_every));
+        async_std::future::pending().await
+    })
 }
