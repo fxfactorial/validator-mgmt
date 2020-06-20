@@ -31,71 +31,6 @@ mod yaml_config {
     }
 }
 
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
-
-fn run_program(path: String) -> Result<(), Box<dyn std::error::Error>> {
-    let f = std::fs::File::open(path)?;
-    let m: yaml_config::Manage = serde_yaml::from_reader(f)?;
-
-    let wrapped = Arc::new(m);
-    let (t1_config, t2_config) = (wrapped.clone(), wrapped.clone());
-
-    thread::spawn(move || {
-        let (every, endpoint, addr) = (
-            t1_config.collect_rewards_every,
-            t1_config.rpc_endpoint.as_str(),
-            t1_config.mainnet_account_addr.as_str(),
-        );
-        let args = [
-            "--node",
-            endpoint,
-            "staking",
-            "collect-rewards",
-            "--delegator-addr",
-            addr,
-            "--chain-id",
-            "mainnet",
-        ];
-
-        loop {
-            let output = std::process::Command::new("hmy")
-                .args(&args)
-                .output()
-                .expect(format!("hmy command failed - very odd {:?}", args).as_str());
-            println!(
-                "here is a {}",
-                match String::from_utf8(output.stdout) {
-                    Ok(s) => s,
-                    _ => {
-                        println!("something broken");
-                        return;
-                    }
-                }
-            );
-            thread::sleep(Duration::from_secs(every));
-        }
-    });
-
-    thread::spawn(move || {
-        let (adjust_every, _endpoint, _addr) = (
-            t2_config.bls_key_management.adjust_keys_off_median_every,
-            t2_config.rpc_endpoint.as_str(),
-            t2_config.mainnet_account_addr.as_str(),
-        );
-        loop {
-            thread::sleep(Duration::from_secs(adjust_every));
-            println!("running the adjust bls key logic")
-        }
-    });
-
-    // Here run the reporting status logic
-    loop {
-        thread::sleep(Duration::from_secs(wrapped.notifications.report_every * 60))
-    }
-}
-
 use {
     hyper::{
         service::{make_service_fn, service_fn},
@@ -115,7 +50,7 @@ async fn serve_req(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> 
 }
 
 use async_std::{fs::File, io, prelude::*, task};
-use std::io::{Error, ErrorKind};
+use std::time::Duration;
 
 async fn read_file(path: &str) -> io::Result<String> {
     let mut file = File::open(path).await?;
@@ -134,6 +69,10 @@ async fn adjust_bls_keys(config: yaml_config::Manage) {
     }
 }
 
+use duct::cmd;
+
+const C: &'static str = r#"'{"current-percent":.result["current-epoch-performance"]["current-epoch-signing-percent"]["current-epoch-signing-percentage"], "name":.result.validator.name,"rate":.result.validator.rate, "signed":.result["current-epoch-performance"]["current-epoch-signing-percent"]["current-epoch-signed"],"to-sign":.result["current-epoch-performance"]["current-epoch-signing-percent"]["current-epoch-to-sign"]}'"#;
+
 async fn handle_reporting(config: yaml_config::Manage) {
     if !config.notifications.enable {
         return println!("email & sms notifications not enabled");
@@ -143,10 +82,25 @@ async fn handle_reporting(config: yaml_config::Manage) {
         config.rpc_endpoint
     );
     let every = config.notifications.report_every;
+    use serde::{Deserialize, Serialize};
+    #[derive(Serialize, Deserialize)]
+    struct Validators {
+        elected: Vec<String>,
+    }
+
+    #[derive(Serialize, Deserialize, Default, Clone, Debug)]
+    #[serde(rename_all = "kebab-case")]
+    struct Validator {
+        current_percent: String,
+        name: String,
+        rate: String,
+        signed: u64,
+        to_sign: u64,
+    }
+
+    let empty: Validator = Default::default();
 
     loop {
-        // task::sleep(Duration::from_secs(every)).await;
-
         let output = std::process::Command::new("bash")
             .args(&["-c", bash_str.as_str()])
             .output()
@@ -157,9 +111,25 @@ async fn handle_reporting(config: yaml_config::Manage) {
             String::from_utf8(output.stderr).unwrap(),
         ) {
             (_, problem) if problem != "" => eprintln!("some hmy issue {}", problem),
-            (json_output, _) => println!("something good {:?}", json_output),
+            (json_output, _) => {
+                let validators: Validators = serde_json::from_str(&json_output).unwrap();
+                let all: Vec<Validator> = validators.elected[0..1]
+                    .iter()
+                    .map(|val| {
+                        let bash_str = format!(
+                            "hmy --node={} blockchain validator information {} | jq {}",
+                            config.rpc_endpoint, val, C,
+                        );
+                        let big_cmd = cmd!("bash", "-c", bash_str.as_str());
+                        let stdout = big_cmd.read().unwrap();
+                        serde_json::from_str(&stdout).unwrap()
+                    })
+                    .collect();
+                println!("hello thing {:#?}", all)
+            }
         }
-        return;
+
+        task::sleep(Duration::from_secs(every)).await;
     }
 }
 
