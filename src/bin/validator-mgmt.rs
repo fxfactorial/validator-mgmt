@@ -82,7 +82,6 @@ async fn read_file(path: &str) -> io::Result<String> {
 
 async fn adjust_bls_keys(config: yaml_config::Manage) {
     loop {
-        println!("adjust bls keys ");
         task::sleep(Duration::from_secs(
             config.bls_key_management.adjust_keys_off_median_every,
         ))
@@ -106,11 +105,19 @@ fn send_email_report(
     sender: &String,
     receiver: &String,
 ) {
+    let count = all.iter().fold(0, |sum, current| {
+        if current.signed == current.to_sign {
+            sum + 1
+        } else {
+            sum
+        }
+    });
+
     use maud::{html, DOCTYPE};
     let report = html! {
     (DOCTYPE)
             meta charset="utf-8";
-    h1 { "signing report" }
+    h1 { (count) " validators signed 100%, " ({all.len() - count}) " didn't" }
     head {
             style {
         r#"
@@ -118,7 +125,9 @@ fn send_email_report(
       font-size: 14px;
       background-color: aliceblue;
       border: solid;
-      padding: 2px;
+      border-width: 1px;
+      padding: 15px;
+      text-align: center;
     }
     body {
       display:flex;
