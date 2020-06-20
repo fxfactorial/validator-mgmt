@@ -95,8 +95,9 @@ use duct::cmd;
 const C: &'static str = r#"'{"current-percent":.result["current-epoch-performance"]["current-epoch-signing-percent"]["current-epoch-signing-percentage"], "name":.result.validator.name,"rate":.result.validator.rate, "signed":.result["current-epoch-performance"]["current-epoch-signing-percent"]["current-epoch-signed"],"to-sign":.result["current-epoch-performance"]["current-epoch-signing-percent"]["current-epoch-to-sign"]}'"#;
 
 use lettre::{
-    message::header, transport::smtp::authentication::Credentials, Message,
-    SmtpTransport, Transport,
+    message::{header, SinglePart},
+    transport::smtp::authentication::Credentials,
+    Message, SmtpTransport, Transport,
 };
 
 fn send_email_report(
@@ -136,12 +137,17 @@ fn send_email_report(
         .header(header::ContentType(
             "text/html; charset=utf8".parse().unwrap(),
         ))
-        .header(header::ContentTransferEncoding::Binary)
         .from(sender.parse().unwrap())
         .to(receiver.parse().unwrap())
         .subject("Validator Signing Report")
-        .body(report.into_string())
-    {
+        .singlepart(
+            SinglePart::builder()
+                .header(header::ContentType(
+                    "text/plain; charset=utf8".parse().unwrap(),
+                ))
+                .header(header::ContentTransferEncoding::Binary)
+                .body(report.into_string()),
+        ) {
         Err(reason) => return eprintln!("issue {:?}", reason),
         Ok(email) => {
             let mailer = SmtpTransport::relay("smtp.gmail.com")
