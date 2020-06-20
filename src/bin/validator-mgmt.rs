@@ -1,9 +1,9 @@
 use clap::{App, Arg};
+use serde::{Deserialize, Serialize};
 
 mod yaml_config {
-    use std::collections::BTreeMap;
-
     use serde::{Deserialize, Serialize};
+    use std::collections::BTreeMap;
 
     #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
     pub struct BLSKeyManagement {
@@ -29,6 +29,16 @@ mod yaml_config {
         pub bls_key_management: BLSKeyManagement,
         pub notifications: Notifications,
     }
+}
+
+#[derive(Serialize, Deserialize, Default, Clone, Debug)]
+#[serde(rename_all = "kebab-case")]
+struct Validator {
+    current_percent: String,
+    name: String,
+    rate: String,
+    signed: u64,
+    to_sign: u64,
 }
 
 use {
@@ -73,6 +83,10 @@ use duct::cmd;
 
 const C: &'static str = r#"'{"current-percent":.result["current-epoch-performance"]["current-epoch-signing-percent"]["current-epoch-signing-percentage"], "name":.result.validator.name,"rate":.result.validator.rate, "signed":.result["current-epoch-performance"]["current-epoch-signing-percent"]["current-epoch-signed"],"to-sign":.result["current-epoch-performance"]["current-epoch-signing-percent"]["current-epoch-to-sign"]}'"#;
 
+fn send_email_report(all: Vec<Validator>) {
+    //
+}
+
 async fn handle_reporting(config: yaml_config::Manage) {
     if !config.notifications.enable {
         return println!("email & sms notifications not enabled");
@@ -82,23 +96,10 @@ async fn handle_reporting(config: yaml_config::Manage) {
         config.rpc_endpoint
     );
     let every = config.notifications.report_every;
-    use serde::{Deserialize, Serialize};
     #[derive(Serialize, Deserialize)]
     struct Validators {
         elected: Vec<String>,
     }
-
-    #[derive(Serialize, Deserialize, Default, Clone, Debug)]
-    #[serde(rename_all = "kebab-case")]
-    struct Validator {
-        current_percent: String,
-        name: String,
-        rate: String,
-        signed: u64,
-        to_sign: u64,
-    }
-
-    let empty: Validator = Default::default();
 
     loop {
         let output = std::process::Command::new("bash")
@@ -125,7 +126,7 @@ async fn handle_reporting(config: yaml_config::Manage) {
                         serde_json::from_str(&stdout).unwrap()
                     })
                     .collect();
-                println!("hello thing {:#?}", all)
+                send_email_report(all)
             }
         }
 
