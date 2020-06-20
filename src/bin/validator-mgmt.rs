@@ -1,3 +1,5 @@
+#![feature(proc_macro_hygiene)]
+
 use clap::{App, Arg};
 use serde::{Deserialize, Serialize};
 
@@ -12,12 +14,19 @@ mod yaml_config {
     }
 
     #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
+    #[serde(rename_all = "kebab-case")]
+    pub struct EmailCredentials {
+        pub account_name: String,
+        pub account_password: String,
+    }
+
+    #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
     pub struct Notifications {
         pub enable: bool,
         pub report_every: u64,
         // TODO these could be named types
-        pub email_sender: BTreeMap<String, String>,
-        pub email_receiver: BTreeMap<String, String>,
+        pub email_sender: EmailCredentials,
+        pub email_receiver: String,
         pub mobile_phone: BTreeMap<String, String>,
     }
 
@@ -49,7 +58,9 @@ use {
     std::net::SocketAddr,
 };
 
-async fn serve_req(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
+async fn serve_req(
+    _req: Request<Body>,
+) -> Result<Response<Body>, hyper::Error> {
     // Always return successfully with a response containing a body with
     // a friendly greeting ;)
     println!("Got request at {:?}", _req.uri());
@@ -83,8 +94,66 @@ use duct::cmd;
 
 const C: &'static str = r#"'{"current-percent":.result["current-epoch-performance"]["current-epoch-signing-percent"]["current-epoch-signing-percentage"], "name":.result.validator.name,"rate":.result.validator.rate, "signed":.result["current-epoch-performance"]["current-epoch-signing-percent"]["current-epoch-signed"],"to-sign":.result["current-epoch-performance"]["current-epoch-signing-percent"]["current-epoch-to-sign"]}'"#;
 
-fn send_email_report(all: Vec<Validator>) {
-    //
+use lettre::{
+    message::header, transport::smtp::authentication::Credentials, Message,
+    SmtpTransport, Transport,
+};
+
+fn send_email_report(
+    all: Vec<Validator>,
+    creds: Credentials,
+    sender: &String,
+    receiver: &String,
+) {
+    use maud::{html, DOCTYPE};
+    let report = html! {
+    (DOCTYPE)
+            meta charset="utf-8";
+    h1 { "signing report" }
+    head {
+            style {
+        r#"
+    .validator-row {
+      font-size: 14px;
+      background-color: aliceblue;
+      border: solid;
+      padding: 2px;
+    }
+    body {
+      display:flex;
+      flex-direction:column;
+}"#
+            }
+    }
+    body {
+        @for val in all {
+        p class="validator-row" { (format!("{:?}", val)) }
+        }
+    }
+    };
+
+    match Message::builder()
+        .header(header::ContentType(
+            "text/html; charset=utf8".parse().unwrap(),
+        ))
+        .header(header::ContentTransferEncoding::Binary)
+        .from(sender.parse().unwrap())
+        .to(receiver.parse().unwrap())
+        .subject("Validator Signing Report")
+        .body(report.into_string())
+    {
+        Err(reason) => return eprintln!("issue {:?}", reason),
+        Ok(email) => {
+            let mailer = SmtpTransport::relay("smtp.gmail.com")
+                .unwrap()
+                .credentials(creds)
+                .build();
+            match mailer.send(&email) {
+                Ok(b) => println!("everything sent well  {:?}", b),
+                Err(reason) => eprintln!("issue sending out email {}", reason),
+            }
+        }
+    }
 }
 
 async fn handle_reporting(config: yaml_config::Manage) {
@@ -101,6 +170,14 @@ async fn handle_reporting(config: yaml_config::Manage) {
         elected: Vec<String>,
     }
 
+    let yaml_config::EmailCredentials {
+        account_name,
+        account_password,
+    } = config.notifications.email_sender;
+    let creds = Credentials::new(account_name.clone(), account_password);
+    let receipent = config.notifications.email_receiver;
+    let endpoint = config.rpc_endpoint;
+
     loop {
         let output = std::process::Command::new("bash")
             .args(&["-c", bash_str.as_str()])
@@ -111,22 +188,26 @@ async fn handle_reporting(config: yaml_config::Manage) {
             String::from_utf8(output.stdout).unwrap(),
             String::from_utf8(output.stderr).unwrap(),
         ) {
-            (_, problem) if problem != "" => eprintln!("some hmy issue {}", problem),
+            (_, problem) if problem != "" => {
+                eprintln!("some hmy issue {}", problem)
+            }
             (json_output, _) => {
-                let validators: Validators = serde_json::from_str(&json_output).unwrap();
-                let all: Vec<Validator> = validators.elected[0..1]
+                let validators: Validators =
+                    serde_json::from_str(&json_output).unwrap();
+                let all: Vec<Validator> = validators.elected
                     .iter()
                     .map(|val| {
                         let bash_str = format!(
                             "hmy --node={} blockchain validator information {} | jq {}",
-                            config.rpc_endpoint, val, C,
+                            &endpoint, val, C,
                         );
                         let big_cmd = cmd!("bash", "-c", bash_str.as_str());
                         let stdout = big_cmd.read().unwrap();
                         serde_json::from_str(&stdout).unwrap()
                     })
                     .collect();
-                send_email_report(all)
+
+                send_email_report(all, creds.clone(), &account_name, &receipent)
             }
         }
 
@@ -153,8 +234,12 @@ async fn collect_rewards(config: yaml_config::Manage) {
                     String::from_utf8(output.stdout).unwrap(),
                     String::from_utf8(output.stderr).unwrap(),
                 ) {
-                    (_, problem) if problem != "" => eprintln!("some hmy issue {}", problem),
-                    (json_output, _) => println!("something good {:?}", json_output),
+                    (_, problem) if problem != "" => {
+                        eprintln!("some hmy issue {}", problem)
+                    }
+                    (json_output, _) => {
+                        println!("something good {:?}", json_output)
+                    }
                 }
             }
             Err(oops) => {
